@@ -1,0 +1,26 @@
+[project]
+name = "lsp-bridge-mcp"
+version = "0.1.0"
+description = "MCP server that bridges Claude Code to LSP servers (Metals, rust-analyzer, etc.)"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=0.9.0",
+    "pygls>=1.3.0",
+    "python-lsp-jsonrpc>=1.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.scripts]
+lsp-bridge = "lsp_bridge.server:main"

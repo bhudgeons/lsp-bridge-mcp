@@ -1,0 +1,9 @@
+{
+  "servers": [
+    {
+      "name": "metals",
+      "workspace_root": "/path/to/your/scala/project",
+      "command": ["metals"]
+    }
+  ]
+}
