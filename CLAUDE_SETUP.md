@@ -163,7 +163,12 @@ sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_c
 ```
 get_hover(workspace="metals", file_path="/absolute/path/File.scala", line=10, character=15)
 ```
-This is MUCH faster than searching through code or reading library source files.
+
+**To jump to a symbol's definition (instead of searching/grepping):**
+```
+get_definition(workspace="metals", file_path="/absolute/path/File.scala", line=10, character=15)
+```
+These are MUCH faster than searching through code or reading library source files.
 
 ## After EVERY File Edit (Auto-Diagnostics)
 
@@ -254,6 +259,33 @@ get_hover(workspace="metals", file_path="/Users/you/project/Main.scala", line=5,
 # Parameters: x - the object to print.
 ```
 
+## Using Go to Definition
+
+**Use `get_definition` to jump directly to where a symbol is defined** instead of searching/grepping through code.
+
+```
+get_definition(workspace="metals", file_path="/absolute/path/File.scala", line=10, character=15)
+```
+
+**Parameters:** Same as `get_hover` (workspace, file_path, line, character)
+
+**Use cases:**
+- Navigate to method implementations
+- Find class/trait/object definitions
+- Jump to where a variable is declared
+- Explore library source code (Metals extracts sources from JARs)
+
+**Example:**
+```
+# To find where `greet` is defined at line 18, column 18:
+get_definition(workspace="metals", file_path="/Users/you/project/Main.scala", line=18, character=18)
+
+# Returns:
+# Definition found:
+# 📍 /Users/you/project/Main.scala:21
+# Use `Read` tool to view this file at line 21.
+```
+
 ## Why LSP Instead of sbt
 
 - **Faster**: LSP is real-time (~3s), sbt is slow (30-60s)
@@ -262,6 +294,7 @@ get_hover(workspace="metals", file_path="/Users/you/project/Main.scala", line=5,
 - **Precise**: LSP shows exact locations
 - **No prompts**: Reading .lsp-bridge/ doesn't need permission
 - **Hover info**: Instantly get type signatures and documentation
+- **Go to definition**: Jump directly to symbol definitions
 
 ## When to Use sbt
 
@@ -350,7 +383,9 @@ After this setup:
 4. ✅ No permission prompts
 5. ✅ ~3 second feedback loop
 6. ✅ Instant type lookups with `get_hover`
+7. ✅ Jump to definitions with `get_definition`
 
 The key insights:
 - **PostToolUse hooks enable automatic compilation**, so Claude just needs to read a file to get diagnostics
 - **Hover provides instant type information**, so Claude doesn't need to search through code or libraries
+- **Go to definition navigates directly to symbols**, eliminating the need to search/grep for implementations

@@ -43,6 +43,11 @@ For type information and documentation, use get_hover:
   get_hover(workspace="metals", file_path="/path/to/File.scala", line=10, character=15)
 
 This returns method signatures, case class fields, scaladoc, and type information instantly.
+
+To jump to a symbol's definition (instead of searching/grepping), use get_definition:
+  get_definition(workspace="metals", file_path="/path/to/File.scala", line=10, character=15)
+
+This returns the exact file and line where the symbol is defined.
 """
 
 
@@ -192,6 +197,32 @@ class LSPBridgeServer:
                             "file_path": {
                                 "type": "string",
                                 "description": "Absolute path to the file",
+                            },
+                            "line": {
+                                "type": "integer",
+                                "description": "Line number (1-indexed, as shown in editors)",
+                            },
+                            "character": {
+                                "type": "integer",
+                                "description": "Character/column position (0-indexed)",
+                            },
+                        },
+                        "required": ["workspace", "file_path", "line", "character"],
+                    },
+                ),
+                Tool(
+                    name="get_definition",
+                    description="Jump to the definition of a symbol. Returns the file path and line number where the symbol is defined. Use this to navigate to method implementations, class definitions, trait definitions, etc. Much faster than searching through code.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "workspace": {
+                                "type": "string",
+                                "description": "Workspace name (e.g., 'metals')",
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Absolute path to the file containing the symbol reference",
                             },
                             "line": {
                                 "type": "integer",
@@ -465,6 +496,82 @@ class LSPBridgeServer:
                     )
                 ]
 
+            elif name == "get_definition":
+                workspace = arguments.get("workspace")
+                file_path = arguments.get("file_path")
+                line = arguments.get("line")
+                character = arguments.get("character")
+
+                if not all([workspace, file_path, line is not None, character is not None]):
+                    return [
+                        TextContent(
+                            type="text",
+                            text="Error: workspace, file_path, line, and character are required",
+                        )
+                    ]
+
+                # Auto-detect on first call if no workspaces
+                if not self.lsp_clients:
+                    logger.info("No workspaces connected, attempting auto-detection...")
+                    await self.auto_detect_workspace()
+
+                if workspace not in self.lsp_clients:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"Error: Unknown workspace '{workspace}'. Available: {list(self.lsp_clients.keys())}",
+                        )
+                    ]
+
+                client = self.lsp_clients[workspace]
+
+                # Ensure file is opened in LSP
+                path = Path(file_path).resolve()
+                uri = path.as_uri()
+
+                if workspace not in self.opened_files:
+                    self.opened_files[workspace] = set()
+
+                if uri not in self.opened_files[workspace]:
+                    try:
+                        content = path.read_text()
+                        await client.did_open(uri, "scala", content)
+                        self.opened_files[workspace].add(uri)
+                        logger.info(f"Opened file for definition: {path.name}")
+                        # Give Metals a moment to analyze the file
+                        await asyncio.sleep(2)
+                    except Exception as e:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Error opening file: {e}",
+                            )
+                        ]
+
+                # Convert 1-indexed line to 0-indexed for LSP
+                lsp_line = line - 1
+
+                # Get definition
+                definition_result = await client.definition(uri, lsp_line, character)
+
+                if not definition_result:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"No definition found at {path.name}:{line}:{character}",
+                        )
+                    ]
+
+                # Format the definition result
+                formatted = self._format_definition(definition_result, path.name, line, character)
+
+                return [
+                    TextContent(
+                        type="text",
+                        text=formatted,
+                    )
+                ]
+
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
         @self.server.list_prompts()
@@ -601,6 +708,54 @@ Diagnostics:
             start = range_info.get("start", {})
             end = range_info.get("end", {})
             result += f"\n\n_Symbol spans: {start.get('line', 0) + 1}:{start.get('character', 0)} - {end.get('line', 0) + 1}:{end.get('character', 0)}_"
+
+        return result
+
+    def _format_definition(
+        self, definition_result: List[Dict[str, Any]], source_file: str, line: int, character: int
+    ) -> str:
+        """Format definition result for readable output."""
+        if not definition_result:
+            return f"No definition found at {source_file}:{line}:{character}"
+
+        locations = []
+        for loc in definition_result:
+            # Handle both Location and LocationLink formats
+            if "targetUri" in loc:
+                # LocationLink format
+                uri = loc["targetUri"]
+                range_info = loc.get("targetSelectionRange") or loc.get("targetRange", {})
+            else:
+                # Location format
+                uri = loc.get("uri", "")
+                range_info = loc.get("range", {})
+
+            # Convert URI to file path
+            file_path = uri.replace("file://", "")
+            file_name = Path(file_path).name
+
+            # Get line number (convert from 0-indexed to 1-indexed)
+            start = range_info.get("start", {})
+            def_line = start.get("line", 0) + 1
+            def_char = start.get("character", 0)
+
+            locations.append({
+                "file": file_name,
+                "path": file_path,
+                "line": def_line,
+                "character": def_char,
+            })
+
+        # Format output
+        if len(locations) == 1:
+            loc = locations[0]
+            result = f"**Definition found:**\n\n"
+            result += f"📍 `{loc['path']}:{loc['line']}`\n"
+            result += f"\nUse `Read` tool to view this file at line {loc['line']}."
+        else:
+            result = f"**Multiple definitions found ({len(locations)}):**\n\n"
+            for i, loc in enumerate(locations, 1):
+                result += f"{i}. `{loc['path']}:{loc['line']}`\n"
 
         return result
 

@@ -7,9 +7,10 @@ Connect Claude Code to Language Server Protocol (LSP) servers for real-time comp
 - **Auto-Diagnostics**: PostToolUse hook automatically triggers compilation after edits
 - **Real-time Diagnostics**: See compilation errors and warnings as they happen
 - **Hover Information**: Get type signatures, documentation, and scaladoc instantly
+- **Go to Definition**: Jump directly to where symbols are defined (methods, classes, traits)
 - **Multi-Language Support**: Works with any LSP server (Metals, rust-analyzer, typescript-language-server, etc.)
 - **MCP Resources**: Diagnostics exposed as readable resources
-- **MCP Tools**: Query diagnostics, trigger compilation, check status, get hover info
+- **MCP Tools**: Query diagnostics, trigger compilation, hover info, go to definition
 - **Local Diagnostics File**: Writes to `<project>/.lsp-bridge/diagnostics.json` for easy reading
 
 ## 🚀 Quick Start
@@ -268,6 +269,28 @@ get_hover(workspace="metals", file_path="/path/to/Main.scala", line=10, characte
 - View scaladoc/documentation for library functions
 - Check type inference results
 
+### `get_definition`
+Jump to the definition of a symbol. Returns the file path and line number where the symbol is defined.
+
+**Parameters:**
+- `workspace` (required): Workspace name (e.g., "metals")
+- `file_path` (required): Absolute path to the file containing the symbol reference
+- `line` (required): Line number (1-indexed, as shown in editors)
+- `character` (required): Character/column position (0-indexed)
+
+**Returns:** File path and line number of the definition
+
+**Example:**
+```
+get_definition(workspace="metals", file_path="/path/to/Main.scala", line=18, character=15)
+```
+
+**Use cases:**
+- Navigate to method implementations
+- Find class/trait definitions
+- Jump to where a variable is declared
+- Explore library source code (Metals extracts sources from JARs)
+
 ### `get_diagnostics`
 Get compilation errors and warnings.
 
@@ -433,8 +456,8 @@ Contributions welcome! This is a community project.
 - [x] Auto-diagnostics via PostToolUse hook
 - [x] Local diagnostics file (.lsp-bridge/diagnostics.json)
 - [x] Hover information (type signatures, docs, scaladoc)
+- [x] Go to definition
 - [ ] Code actions support
-- [ ] Go to definition
 - [ ] Find references
 - [ ] Rename support
 - [ ] Auto-format on save
