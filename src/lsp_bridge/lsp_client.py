@@ -226,6 +226,9 @@ class LSPClient:
                     for diag in diagnostics[:3]:  # Log first 3
                         logger.info(f"  - {diag.get('severity')}: {diag.get('message')}")
 
+                # Write diagnostics to temp file for hook integration
+                self._write_diagnostics_file()
+
             # Call registered handlers
             if method in self.notification_handlers:
                 for handler in self.notification_handlers[method]:
@@ -270,6 +273,44 @@ class LSPClient:
         if uri:
             return {uri: self.diagnostics.get(uri, [])}
         return self.diagnostics.copy()
+
+    def _write_diagnostics_file(self) -> None:
+        """Write current diagnostics to workspace .lsp-bridge directory."""
+        try:
+            # Count errors and warnings
+            errors = []
+            warnings = []
+            for uri, diags in self.diagnostics.items():
+                file_path = uri.replace("file://", "")
+                file_name = Path(file_path).name
+                for diag in diags:
+                    severity = diag.get("severity", 3)
+                    line = diag.get("range", {}).get("start", {}).get("line", 0) + 1
+                    msg = diag.get("message", "")
+                    entry = {"file": file_name, "line": line, "message": msg}
+                    if severity == 1:
+                        errors.append(entry)
+                    elif severity == 2:
+                        warnings.append(entry)
+
+            output = {
+                "error_count": len(errors),
+                "warning_count": len(warnings),
+                "errors": errors[:5],  # Limit to first 5
+                "warnings": warnings[:3],  # Limit to first 3
+            }
+
+            # Write to workspace .lsp-bridge directory
+            lsp_dir = self.workspace_root / ".lsp-bridge"
+            lsp_dir.mkdir(exist_ok=True)
+            with open(lsp_dir / "diagnostics.json", "w") as f:
+                json.dump(output, f)
+
+            # Also write to /tmp for backwards compatibility
+            with open("/tmp/lsp-bridge-diagnostics.json", "w") as f:
+                json.dump(output, f)
+        except Exception as e:
+            logger.error(f"Failed to write diagnostics file: {e}")
 
     async def execute_command(self, command: str, arguments: List[Any] = None) -> Any:
         """Execute a workspace command (e.g., trigger compilation)."""

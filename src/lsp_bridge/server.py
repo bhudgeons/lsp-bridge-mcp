@@ -49,6 +49,8 @@ class LSPBridgeServer:
         self.lsp_clients: Dict[str, LSPClient] = {}
         self.config: Dict[str, Any] = {}
         self.opened_files: Dict[str, set] = {}  # workspace -> set of opened file URIs
+        self.file_versions: Dict[str, int] = {}  # uri -> version for didChange
+        self._notify_watcher_task: Optional[asyncio.Task] = None
         self._setup_handlers()
 
     def _setup_handlers(self) -> None:
@@ -665,10 +667,68 @@ Diagnostics:
 
             await self.start_lsp_client(workspace_name, workspace_root, command)
 
+    async def _watch_notify_file(self) -> None:
+        """Watch for file change notifications from hooks."""
+        notify_file = Path("/tmp/lsp-bridge-notify.txt")
+        last_mtime = 0.0
+
+        while True:
+            try:
+                if notify_file.exists():
+                    mtime = notify_file.stat().st_mtime
+                    if mtime > last_mtime:
+                        last_mtime = mtime
+                        file_path = notify_file.read_text().strip()
+                        if file_path and file_path.endswith(".scala"):
+                            logger.info(f"Hook notification for: {file_path}")
+                            await self._notify_file_changed(file_path)
+                await asyncio.sleep(0.5)  # Check every 500ms
+            except Exception as e:
+                logger.error(f"Error in notify watcher: {e}")
+                await asyncio.sleep(1)
+
+    async def _notify_file_changed(self, file_path: str) -> None:
+        """Send didChange notification to Metals for a file."""
+        try:
+            path = Path(file_path).resolve()
+            uri = path.as_uri()
+
+            # Auto-detect workspace if none connected
+            if not self.lsp_clients:
+                logger.info("No workspaces connected, auto-detecting for file change...")
+                await self.auto_detect_workspace()
+
+            # Find the appropriate client
+            for workspace, client in self.lsp_clients.items():
+                if str(path).startswith(str(client.workspace_root)):
+                    # Read the file content
+                    content = path.read_text()
+
+                    # Increment version
+                    self.file_versions[uri] = self.file_versions.get(uri, 0) + 1
+                    version = self.file_versions[uri]
+
+                    # Send didChange
+                    await client.did_change(uri, content, version)
+                    logger.info(f"Sent didChange for {path.name} (v{version})")
+
+                    # Trigger compilation
+                    if workspace == "metals":
+                        await client.execute_command("metals.compile-cascade")
+                        logger.info("Triggered compilation after file change")
+                    break
+            else:
+                logger.warning(f"No workspace found for {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to notify file change: {e}")
+
     async def run(self, config_path: Optional[str] = None) -> None:
         """Run the MCP server."""
         if config_path:
             await self.load_config(config_path)
+
+        # Start the notify file watcher
+        self._notify_watcher_task = asyncio.create_task(self._watch_notify_file())
 
         async with stdio_server() as (read_stream, write_stream):
             await self.server.run(

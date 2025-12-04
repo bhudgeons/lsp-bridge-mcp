@@ -5,10 +5,10 @@ This guide shows how to configure Claude Code to automatically use LSP for compi
 ## Overview
 
 With this setup:
-- ✅ Claude automatically checks LSP for errors after every file edit
-- ✅ Real-time compilation feedback (1-2 seconds vs 30+ seconds for sbt)
+- ✅ **Auto-diagnostics**: Compilation runs automatically after every Scala file edit
+- ✅ **No tool calls needed**: Just read `.lsp-bridge/diagnostics.json` after edits
+- ✅ Real-time compilation feedback (~3 seconds vs 30+ seconds for sbt)
 - ✅ No manual permission prompts for common operations
-- ✅ Automatic Metals notification when files change
 
 ## Prerequisites
 
@@ -58,8 +58,6 @@ If you installed lsp-bridge in a venv, use the full path to the venv's Python:
 
 Replace `/absolute/path/to/lsp-bridge-mcp` with your actual installation path.
 
-**Why this matters:** Using the full path ensures the MCP server starts correctly after reboots without needing to activate the virtual environment.
-
 **Note:** After adding this, restart Claude Code for the MCP server to load.
 
 ## Step 2: Configure Permissions
@@ -74,113 +72,15 @@ Add to the `permissions.allow` array:
 {
   "permissions": {
     "allow": [
-      "mcp__lsp-bridge",
-      "mcp__lsp-bridge__list_workspaces",
-      "mcp__lsp-bridge__get_diagnostics",
-      "mcp__lsp-bridge__trigger_compilation",
-      "mcp__lsp-bridge__get_status"
+      "mcp__lsp-bridge"
     ]
   }
 }
 ```
 
-## Step 3: Configure LSP-First Workflow
+## Step 3: Configure PostToolUse Hook (Required for Auto-Diagnostics)
 
-Add instructions to your global `~/.claude/CLAUDE.md` to make Claude use LSP instead of build tools.
-
-**File: `~/.claude/CLAUDE.md`**
-
-Add this section (customize for your language - example shows Scala/Metals):
-
-```markdown
-# Scala/LSP Development Workflow
-
-**CRITICAL**: When working on Scala projects, ALWAYS use LSP (Language Server Protocol) via the lsp-bridge MCP server instead of sbt compile.
-
-## FIRST STEP: When asked to check/fix errors
-
-**BEFORE doing anything else, ALWAYS run these commands IN ORDER:**
-
-1. `list_workspaces` - Initializes LSP workspace (may fail on first attempt in fresh session)
-   - If fails with "No such tool available": **Tell the user to send any message to retry**
-   - MCP tools become available between requests, not during a request
-   - Automated retries within the same response will always fail
-   - Once user sends a new message, the retry will succeed immediately
-   - Example message: "MCP server is still initializing. Please type 'continue' or any message, and I'll retry immediately."
-2. `trigger_compilation workspace="metals"` - Ensures Metals compiles the code
-3. `get_diagnostics workspace="metals"` - Retrieves compilation errors
-
-**NEVER:**
-- Skip calling list_workspaces first
-- Do automated retries if list_workspaces fails (they will always fail - need a new user message)
-- Immediately fall back to sbt on first failure (ask user to retry first)
-- Assume LSP tools aren't available without asking user to retry
-- Use `sbt compile` before asking user to retry LSP
-- Read files manually to find errors before checking LSP
-
-## After EVERY File Edit
-
-**MANDATORY**: After editing ANY Scala file, check LSP diagnostics:
-
-1. Make an edit to a .scala file
-2. Wait 1-2 seconds for Metals to process the change
-3. Use trigger_compilation tool with workspace="metals" to ensure compilation
-4. Use get_diagnostics tool with workspace="metals" to check for errors
-5. If errors found → Fix them immediately
-6. Repeat until LSP shows 0 errors
-
-**Never proceed to the next edit without confirming the current edit has no errors (unless the error is expected because you're writing code in stages).**
-
-## LSP Initialization Pattern
-
-**First LSP operation in a session:**
-1. **Call list_workspaces first** - may fail with "No such tool available"
-2. **If it fails, ask user to send any message** - tools register between requests
-3. **Retry after user message** - will succeed immediately
-4. **Then call get_diagnostics** or other tools - these will work instantly
-
-**Example:**
-```
-1. Call list_workspaces → "No such tool available"
-2. Tell user: "MCP server initializing. Please type 'continue' and I'll retry."
-3. User sends message → New request starts
-4. Call list_workspaces → Works immediately
-5. Call get_diagnostics workspace="metals" → Works instantly
-6. All subsequent LSP calls work instantly
-```
-
-**If LSP tools fail with "No such tool available":**
-1. **This means MCP server is still initializing** (tools register between requests, not during requests)
-2. **Do NOT do automated retries - they will all fail**
-3. **Instead, ask the user to send any message to retry**
-4. When user sends a new message, retry list_workspaces - it will succeed immediately
-5. Only fall back to `sbt compile` if the second attempt (after user message) also fails
-
-**CRITICAL: MCP tools become available between requests. Automated retries within the same response will ALWAYS fail. You MUST wait for a new user message to start a new request.**
-
-## Why LSP Instead of sbt
-
-- **Faster**: LSP is real-time (1-2s), sbt is slow (30-60s)
-- **Always running**: LSP is already monitoring
-- **Integrated**: LSP is part of the editor workflow
-- **Precise**: LSP shows exact locations
-- **Auto-approved**: No permission popups
-
-## When to Use sbt
-
-Use sbt ONLY for:
-- Running tests: `sbt test`
-- Running application: `sbt run`
-- Publishing: `sbt publish`
-- Packaging: `sbt assembly`
-- Initial project setup
-
-**For compilation checking: ALWAYS use LSP.**
-```
-
-## Step 4: Configure Post-Edit Hooks (Optional but Recommended)
-
-Automatically notify Metals when files change so diagnostics update immediately.
+This is the key to auto-diagnostics. The hook triggers compilation automatically after every Scala file edit.
 
 **File: `~/.claude/settings.json`**
 
@@ -191,22 +91,11 @@ Add to the `hooks` section:
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Edit",
+        "matcher": "Edit|Write",
         "hooks": [
           {
             "type": "command",
-            "command": "/path/to/notify-metals.sh",
-            "statusMessage": "Syncing with Metals..."
-          }
-        ]
-      },
-      {
-        "matcher": "Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/path/to/notify-metals.sh",
-            "statusMessage": "Syncing with Metals..."
+            "command": "~/.claude/hooks/notify-metals.sh"
           }
         ]
       }
@@ -219,50 +108,165 @@ Add to the `hooks` section:
 
 ```bash
 #!/bin/bash
-# Touch the edited file to trigger Metals file watcher
-if [ -n "$CLAUDE_TOOL_RESULT" ]; then
-  # Extract file path from Edit/Write tool result
-  FILE_PATH=$(echo "$CLAUDE_TOOL_RESULT" | grep -o '/[^"]*\.scala' | head -1)
-  if [ -n "$FILE_PATH" ] && [ -f "$FILE_PATH" ]; then
-    touch "$FILE_PATH"
-  fi
+# Read JSON from stdin and notify lsp-bridge for Scala files
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+
+if [[ -n "$FILE_PATH" && "$FILE_PATH" == *.scala ]]; then
+    sleep 0.3
+    echo "$FILE_PATH" > /tmp/lsp-bridge-notify.txt
 fi
 ```
 
 Make it executable:
 ```bash
+mkdir -p ~/.claude/hooks
 chmod +x ~/.claude/hooks/notify-metals.sh
+```
+
+**How it works:**
+1. Claude edits a `.scala` file
+2. Hook writes file path to `/tmp/lsp-bridge-notify.txt`
+3. MCP server watcher detects the change, sends `didChange` to Metals
+4. Metals compiles and publishes diagnostics
+5. Diagnostics written to `<project>/.lsp-bridge/diagnostics.json`
+6. Claude reads the diagnostics file (no permission prompt needed)
+
+## Step 4: Configure CLAUDE.md
+
+Add instructions to your global `~/.claude/CLAUDE.md` to make Claude use the auto-diagnostics flow.
+
+**File: `~/.claude/CLAUDE.md`**
+
+```markdown
+# Scala/LSP Development Workflow
+
+**CRITICAL**: When working on Scala projects, ALWAYS use LSP (Language Server Protocol) via the lsp-bridge MCP server instead of sbt compile.
+
+## TL;DR - READ THIS FIRST
+
+**NEVER run `sbt compile` or `sbt test:compile` to check for errors.**
+
+**After editing a Scala file, diagnostics are automatically updated.** Just read the diagnostics file:
+```bash
+sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
+```
+
+**If you need to manually trigger compilation or the diagnostics file doesn't exist:**
+```
+1. list_workspaces
+2. trigger_compilation workspace="metals"
+3. get_diagnostics workspace="metals"
+```
+
+## After EVERY File Edit (Auto-Diagnostics)
+
+**A PostToolUse hook automatically triggers Metals compilation after every Scala file edit.**
+
+Diagnostics are written to `<project>/.lsp-bridge/diagnostics.json`. To check:
+
+```bash
+sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq .
+```
+
+**Workflow:**
+```
+1. Edit a .scala file
+2. Wait ~3 seconds (hook triggers compilation automatically)
+3. Read diagnostics: cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
+4. If errors found → Fix them immediately
+5. Repeat until 0 errors
+```
+
+**If diagnostics file doesn't exist or seems stale**, fall back to manual LSP:
+```
+1. list_workspaces
+2. trigger_compilation workspace="metals"
+3. get_diagnostics workspace="metals"
+```
+
+## Example Workflow
+
+```
+User: "Fix the type error in Main.scala"
+
+1. Read Main.scala to see the code
+2. Check current errors: cat <project>/.lsp-bridge/diagnostics.json | jq .
+3. Edit Main.scala to fix the error
+4. Wait and check: sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
+5. If errors remain: Fix them immediately
+6. If no errors: Proceed or report success
+
+NEVER skip step 4. NEVER assume the edit was correct.
+NEVER use sbt compile - ALWAYS use LSP.
+```
+
+## Multiple Edits
+
+When making multiple changes:
+
+```
+1. Edit File1.scala
+2. sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
+3. Fix any errors
+4. Edit File2.scala
+5. sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
+6. Fix any errors
+```
+
+**Check diagnostics after EACH edit, not just at the end.**
+
+## Why LSP Instead of sbt
+
+- **Faster**: LSP is real-time (~3s), sbt is slow (30-60s)
+- **Automatic**: Hook triggers compilation, no manual tool calls
+- **Always running**: LSP is already monitoring
+- **Precise**: LSP shows exact locations
+- **No prompts**: Reading .lsp-bridge/ doesn't need permission
+
+## When to Use sbt
+
+Use sbt ONLY for:
+- Running tests: `sbt test`
+- Running application: `sbt run`
+- Publishing: `sbt publish`
+- Packaging: `sbt assembly`
+- Initial project setup
+
+**For compilation checking: ALWAYS use LSP via auto-diagnostics.**
 ```
 
 ## Step 5: Test the Setup
 
-1. **Start a fresh Claude Code session**
+1. **Restart Claude Code** to pick up all configuration changes
 2. **Navigate to a Scala project** with Bloop configured
-3. **Ask Claude**: "fix errors"
+3. **Ask Claude**: "introduce an error in Main.scala and then fix it"
 4. **Expected behavior**:
-   - Claude tries `list_workspaces`
-   - If it's the first attempt in a fresh session, it may fail with "No such tool available"
-   - Claude says: "MCP server is initializing. Please type 'continue' or any message, and I'll retry immediately."
-   - You type: "continue" (or any message)
-   - Claude retries `list_workspaces` → Works immediately
-   - Claude calls `trigger_compilation` and `get_diagnostics`
-   - Claude shows you the errors
+   - Claude edits the file
+   - Hook triggers automatically
+   - Claude reads `.lsp-bridge/diagnostics.json`
+   - Claude sees the error and fixes it
+   - Claude verifies 0 errors
 
 ## Troubleshooting
 
-### "No such tool available" - even after retry
+### Diagnostics file doesn't exist
 
-**Symptom:** Even after sending a message to retry, tools still aren't available.
+**Symptom:** `<project>/.lsp-bridge/diagnostics.json` doesn't exist after edits.
 
-**Solution:** Check if lsp-bridge MCP server is running:
-```bash
-# Check Claude's MCP server list
-claude mcp list
+**Solution:**
+1. Check if Metals is running: `tail /tmp/lsp-bridge-mcp.log`
+2. Manually trigger: Use `list_workspaces`, then `trigger_compilation`
+3. Check Bloop is configured: `ls .bloop/`
 
-# Should show lsp-bridge with status "running"
-```
+### Hook doesn't trigger
 
-If not running, check `~/.claude.json` configuration and restart Claude Code.
+**Symptom:** `/tmp/lsp-bridge-notify.txt` isn't updated after edits.
+
+**Solution:**
+1. Check hook is configured in `~/.claude/settings.json`
+2. Check hook script exists and is executable: `ls -la ~/.claude/hooks/notify-metals.sh`
+3. Test hook manually: `echo '{"tool_input":{"file_path":"test.scala"}}' | ~/.claude/hooks/notify-metals.sh`
 
 ### LSP shows 0 errors but sbt compile shows errors
 
@@ -280,82 +284,31 @@ sbt bloopInstall
 sleep 3
 ```
 
-Metals requires Bloop (Build Server Protocol) for compilation diagnostics.
+### Diagnostics are stale
 
-### Diagnostics are stale after editing
-
-**Symptom:** LSP doesn't show new errors after editing files.
+**Symptom:** Diagnostics file shows old errors.
 
 **Solution:**
-1. Ensure post-edit hooks are configured (Step 4)
-2. Manually call `trigger_compilation` after edits
-3. Wait 1-2 seconds for Metals to process changes
+1. Check hook is triggering: `stat /tmp/lsp-bridge-notify.txt`
+2. Check MCP logs: `tail /tmp/lsp-bridge-mcp.log`
+3. Manually trigger compilation with LSP tools
 
-### Permission prompts every time
+### MCP tools not available
 
-**Symptom:** Claude asks for permission to use LSP tools.
+**Symptom:** "No such tool available" when trying manual LSP commands.
 
-**Solution:** Check `~/.claude/settings.json` has lsp-bridge tools in `permissions.allow` (Step 2).
-
-## Language-Specific Notes
-
-### Scala with Metals
-
-- Requires Bloop: `sbt bloopInstall`
-- First compilation takes 10-15 seconds
-- Subsequent checks are near-instant
-- Workspace name: usually "metals"
-
-### Rust with rust-analyzer
-
-- No additional setup required
-- Workspace name: usually "rust"
-- Very fast compilation checks
-
-### TypeScript with typescript-language-server
-
-- Requires tsconfig.json
-- Workspace name: usually "typescript"
-- Incremental compilation is fast
-
-## Advanced Configuration
-
-### Multiple Projects
-
-If you work on multiple projects, use project-specific `.mcp.json`:
-
-**File: `/path/to/project/.mcp.json`**
-
-```json
-{
-  "mcpServers": {
-    "lsp-bridge": {
-      "command": "python",
-      "args": [
-        "-m",
-        "lsp_bridge",
-        "${projectDir}/lsp-bridge-config.json"
-      ]
-    }
-  }
-}
-```
-
-### Custom Workspace Names
-
-In your CLAUDE.md, replace "metals" with your workspace name:
-- Scala → "metals"
-- Rust → "rust"
-- TypeScript → "typescript"
-- Custom → whatever you named it in config.json
+**Solution:**
+1. MCP tools register between requests - send any message and retry
+2. Check MCP server is configured in `~/.claude.json`
+3. Restart Claude Code
 
 ## Summary
 
 After this setup:
-1. ✅ Claude uses LSP instead of slow build tools
-2. ✅ Real-time error checking after every edit
-3. ✅ No permission prompts
-4. ✅ Automatic Metals synchronization
-5. ✅ First-class LSP integration
+1. ✅ Automatic compilation after every Scala edit
+2. ✅ Just read `.lsp-bridge/diagnostics.json` for errors
+3. ✅ No manual tool calls needed
+4. ✅ No permission prompts
+5. ✅ ~3 second feedback loop
 
-The key insight: **MCP tools register between requests**, so if the first attempt fails, just send any message and retry - it will work immediately.
+The key insight: **PostToolUse hooks enable automatic compilation**, so Claude just needs to read a file to get diagnostics.

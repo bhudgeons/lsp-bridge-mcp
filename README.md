@@ -4,11 +4,12 @@ Connect Claude Code to Language Server Protocol (LSP) servers for real-time comp
 
 ## 🎯 Features
 
+- **Auto-Diagnostics**: PostToolUse hook automatically triggers compilation after edits
 - **Real-time Diagnostics**: See compilation errors and warnings as they happen
 - **Multi-Language Support**: Works with any LSP server (Metals, rust-analyzer, typescript-language-server, etc.)
 - **MCP Resources**: Diagnostics exposed as readable resources
 - **MCP Tools**: Query diagnostics, trigger compilation, check status
-- **Zero Configuration**: Works out of the box with sensible defaults
+- **Local Diagnostics File**: Writes to `<project>/.lsp-bridge/diagnostics.json` for easy reading
 
 ## 🚀 Quick Start
 
@@ -302,6 +303,49 @@ Diagnostics are returned in this format:
 }
 ```
 
+## 🪝 PostToolUse Hook Setup
+
+To enable auto-diagnostics after every Scala file edit, add this hook to `~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/notify-metals.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Create the hook script at `~/.claude/hooks/notify-metals.sh`:
+
+```bash
+#!/bin/bash
+# Read JSON from stdin and notify lsp-bridge for Scala files
+INPUT=$(cat)
+FILE_PATH=$(echo "$INPUT" | jq -r '.tool_input.file_path // empty')
+
+if [[ -n "$FILE_PATH" && "$FILE_PATH" == *.scala ]]; then
+    sleep 0.3
+    echo "$FILE_PATH" > /tmp/lsp-bridge-notify.txt
+fi
+```
+
+Make it executable: `chmod +x ~/.claude/hooks/notify-metals.sh`
+
+After setup, diagnostics will automatically update after each Scala file edit. Read them from:
+```bash
+cat <project>/.lsp-bridge/diagnostics.json | jq .
+```
+
 ## 🐛 Debugging
 
 Logs are written to `/tmp/lsp-bridge-mcp.log`:
@@ -312,11 +356,23 @@ tail -f /tmp/lsp-bridge-mcp.log
 
 ## 🔍 How It Works
 
+### Auto-Diagnostics Flow
+
+1. **Claude edits a `.scala` file**
+2. **PostToolUse hook** writes file path to `/tmp/lsp-bridge-notify.txt`
+3. **MCP server watcher** detects the change, sends `didChange` to Metals
+4. **Metals compiles** and publishes diagnostics
+5. **Diagnostics written** to `<project>/.lsp-bridge/diagnostics.json`
+6. **Claude reads** the diagnostics file (no permission prompt needed)
+
+### Core Architecture
+
 1. **LSP Client**: Connects to language servers via stdio
 2. **Message Handling**: Subscribes to `textDocument/publishDiagnostics` notifications
 3. **State Management**: Maintains current diagnostics for all files
 4. **MCP Exposure**: Exposes diagnostics as MCP resources and tools
-5. **Real-time Updates**: Diagnostics update automatically as you code
+5. **File Watcher**: Monitors `/tmp/lsp-bridge-notify.txt` for hook notifications
+6. **Local Output**: Writes diagnostics to project-local `.lsp-bridge/` directory
 
 ## 🎨 Architecture
 
@@ -325,10 +381,20 @@ tail -f /tmp/lsp-bridge-mcp.log
 │ Claude Code │ ◄─MCP──►│ LSP Bridge   │ ◄─LSP──►│   Metals    │
 │             │         │ MCP Server   │         │   Server    │
 └─────────────┘         └──────────────┘         └─────────────┘
+       │                       │                        │
+       │ PostToolUse           │ File Watcher           │
+       │ Hook                  │ (/tmp/notify.txt)      │
+       ▼                       ▼                        │
+┌─────────────┐         ┌──────────────┐               │
+│ Edit .scala │────────►│ didChange    │───────────────┘
+│ file        │         │ notification │
+└─────────────┘         └──────────────┘
                               │
-                              ├─ Resources (diagnostics)
-                              ├─ Tools (get_diagnostics, etc.)
-                              └─ Prompts (analyze_diagnostics)
+                              ▼
+                 ┌────────────────────────┐
+                 │ .lsp-bridge/           │
+                 │   diagnostics.json     │◄── Claude reads
+                 └────────────────────────┘
 ```
 
 ## 📝 License
@@ -341,6 +407,8 @@ Contributions welcome! This is a community project.
 
 ## 🚀 Roadmap
 
+- [x] Auto-diagnostics via PostToolUse hook
+- [x] Local diagnostics file (.lsp-bridge/diagnostics.json)
 - [ ] Code actions support
 - [ ] Hover information
 - [ ] Go to definition

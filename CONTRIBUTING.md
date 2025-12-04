@@ -46,11 +46,14 @@ lsp-bridge-mcp/
 - Implements JSON-RPC 2.0 protocol
 - Manages LSP lifecycle (initialize, shutdown)
 - Subscribes to diagnostic notifications
+- Writes diagnostics to `<workspace>/.lsp-bridge/diagnostics.json`
 
 ### MCP Server (`server.py`)
 - Exposes LSP data as MCP resources, tools, and prompts
 - Manages multiple LSP workspace connections
 - Formats diagnostics for Claude Code
+- **File watcher**: Monitors `/tmp/lsp-bridge-notify.txt` for hook notifications
+- **Auto-compilation**: Sends `didChange` to LSP when notified by PostToolUse hook
 
 ## Adding Support for New LSP Servers
 
