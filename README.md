@@ -6,9 +6,10 @@ Connect Claude Code to Language Server Protocol (LSP) servers for real-time comp
 
 - **Auto-Diagnostics**: PostToolUse hook automatically triggers compilation after edits
 - **Real-time Diagnostics**: See compilation errors and warnings as they happen
+- **Hover Information**: Get type signatures, documentation, and scaladoc instantly
 - **Multi-Language Support**: Works with any LSP server (Metals, rust-analyzer, typescript-language-server, etc.)
 - **MCP Resources**: Diagnostics exposed as readable resources
-- **MCP Tools**: Query diagnostics, trigger compilation, check status
+- **MCP Tools**: Query diagnostics, trigger compilation, check status, get hover info
 - **Local Diagnostics File**: Writes to `<project>/.lsp-bridge/diagnostics.json` for easy reading
 
 ## 🚀 Quick Start
@@ -245,6 +246,28 @@ Claude will analyze all errors, suggest fixes, and prioritize them.
 
 ## 🛠️ Available Tools
 
+### `get_hover`
+Get type information, documentation, and signatures for a symbol at a specific position.
+
+**Parameters:**
+- `workspace` (required): Workspace name (e.g., "metals")
+- `file_path` (required): Absolute path to the file
+- `line` (required): Line number (1-indexed, as shown in editors)
+- `character` (required): Character/column position (0-indexed)
+
+**Returns:** Type signature, documentation, and scaladoc for the symbol
+
+**Example:**
+```
+get_hover(workspace="metals", file_path="/path/to/Main.scala", line=10, character=15)
+```
+
+**Use cases:**
+- Look up method signatures without reading source files
+- Get case class field definitions
+- View scaladoc/documentation for library functions
+- Check type inference results
+
 ### `get_diagnostics`
 Get compilation errors and warnings.
 
@@ -409,8 +432,8 @@ Contributions welcome! This is a community project.
 
 - [x] Auto-diagnostics via PostToolUse hook
 - [x] Local diagnostics file (.lsp-bridge/diagnostics.json)
+- [x] Hover information (type signatures, docs, scaladoc)
 - [ ] Code actions support
-- [ ] Hover information
 - [ ] Go to definition
 - [ ] Find references
 - [ ] Rename support

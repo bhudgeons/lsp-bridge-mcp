@@ -38,6 +38,11 @@ NEVER run `sbt compile` or `sbt test:compile` to check for Scala compilation err
 
 This applies EVERY time you need to check compilation - after edits, when fixing errors, when verifying changes.
 Use sbt ONLY for: running tests (sbt test), running the app (sbt run), or packaging (sbt assembly).
+
+For type information and documentation, use get_hover:
+  get_hover(workspace="metals", file_path="/path/to/File.scala", line=10, character=15)
+
+This returns method signatures, case class fields, scaladoc, and type information instantly.
 """
 
 
@@ -172,6 +177,32 @@ class LSPBridgeServer:
                                 "description": "Optional: specific workspace to check",
                             },
                         },
+                    },
+                ),
+                Tool(
+                    name="get_hover",
+                    description="Get type information, documentation, and signatures for a symbol at a specific position. Use this to quickly look up method signatures, case class fields, type definitions, etc. without searching through code.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "workspace": {
+                                "type": "string",
+                                "description": "Workspace name (e.g., 'metals')",
+                            },
+                            "file_path": {
+                                "type": "string",
+                                "description": "Absolute path to the file",
+                            },
+                            "line": {
+                                "type": "integer",
+                                "description": "Line number (1-indexed, as shown in editors)",
+                            },
+                            "character": {
+                                "type": "integer",
+                                "description": "Character/column position (0-indexed)",
+                            },
+                        },
+                        "required": ["workspace", "file_path", "line", "character"],
                     },
                 ),
             ]
@@ -358,6 +389,82 @@ class LSPBridgeServer:
                     )
                 ]
 
+            elif name == "get_hover":
+                workspace = arguments.get("workspace")
+                file_path = arguments.get("file_path")
+                line = arguments.get("line")
+                character = arguments.get("character")
+
+                if not all([workspace, file_path, line is not None, character is not None]):
+                    return [
+                        TextContent(
+                            type="text",
+                            text="Error: workspace, file_path, line, and character are required",
+                        )
+                    ]
+
+                # Auto-detect on first call if no workspaces
+                if not self.lsp_clients:
+                    logger.info("No workspaces connected, attempting auto-detection...")
+                    await self.auto_detect_workspace()
+
+                if workspace not in self.lsp_clients:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"Error: Unknown workspace '{workspace}'. Available: {list(self.lsp_clients.keys())}",
+                        )
+                    ]
+
+                client = self.lsp_clients[workspace]
+
+                # Ensure file is opened in LSP
+                path = Path(file_path).resolve()
+                uri = path.as_uri()
+
+                if workspace not in self.opened_files:
+                    self.opened_files[workspace] = set()
+
+                if uri not in self.opened_files[workspace]:
+                    try:
+                        content = path.read_text()
+                        await client.did_open(uri, "scala", content)
+                        self.opened_files[workspace].add(uri)
+                        logger.info(f"Opened file for hover: {path.name}")
+                        # Give Metals a moment to analyze the file
+                        await asyncio.sleep(2)
+                    except Exception as e:
+                        return [
+                            TextContent(
+                                type="text",
+                                text=f"Error opening file: {e}",
+                            )
+                        ]
+
+                # Convert 1-indexed line to 0-indexed for LSP
+                lsp_line = line - 1
+
+                # Get hover info
+                hover_result = await client.hover(uri, lsp_line, character)
+
+                if not hover_result:
+                    return [
+                        TextContent(
+                            type="text",
+                            text=f"No hover information at {path.name}:{line}:{character}",
+                        )
+                    ]
+
+                # Format the hover result
+                formatted = self._format_hover(hover_result, path.name, line, character)
+
+                return [
+                    TextContent(
+                        type="text",
+                        text=formatted,
+                    )
+                ]
+
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
         @self.server.list_prompts()
@@ -460,6 +567,42 @@ Diagnostics:
         # Mark files as opened
         import time
         client._last_files_opened = time.time()
+
+    def _format_hover(
+        self, hover_result: Dict[str, Any], file_name: str, line: int, character: int
+    ) -> str:
+        """Format hover result for readable output."""
+        contents = hover_result.get("contents", {})
+
+        # Handle different content formats
+        if isinstance(contents, str):
+            text = contents
+        elif isinstance(contents, dict):
+            # MarkupContent format
+            text = contents.get("value", str(contents))
+        elif isinstance(contents, list):
+            # Array of MarkedString
+            parts = []
+            for item in contents:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    parts.append(item.get("value", str(item)))
+            text = "\n\n".join(parts)
+        else:
+            text = str(contents)
+
+        # Add location context
+        result = f"**Hover info at {file_name}:{line}:{character}**\n\n{text}"
+
+        # Add range info if available
+        if "range" in hover_result:
+            range_info = hover_result["range"]
+            start = range_info.get("start", {})
+            end = range_info.get("end", {})
+            result += f"\n\n_Symbol spans: {start.get('line', 0) + 1}:{start.get('character', 0)} - {end.get('line', 0) + 1}:{end.get('character', 0)}_"
+
+        return result
 
     def _format_diagnostics(
         self, diagnostics: Dict[str, List[Dict[str, Any]]]

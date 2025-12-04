@@ -47,6 +47,7 @@ lsp-bridge-mcp/
 - Manages LSP lifecycle (initialize, shutdown)
 - Subscribes to diagnostic notifications
 - Writes diagnostics to `<workspace>/.lsp-bridge/diagnostics.json`
+- **Hover support**: Sends `textDocument/hover` requests for type information
 
 ### MCP Server (`server.py`)
 - Exposes LSP data as MCP resources, tools, and prompts
@@ -54,6 +55,7 @@ lsp-bridge-mcp/
 - Formats diagnostics for Claude Code
 - **File watcher**: Monitors `/tmp/lsp-bridge-notify.txt` for hook notifications
 - **Auto-compilation**: Sends `didChange` to LSP when notified by PostToolUse hook
+- **Hover tool**: Exposes `get_hover` for instant type lookups and documentation
 
 ## Adding Support for New LSP Servers
 
@@ -120,6 +122,7 @@ This connects to your configured LSP server and verifies:
    - `list_workspaces`
    - `get_diagnostics`
    - `trigger_compilation`
+   - `get_hover` (for type info at a position)
 
 ## Pull Request Process
 

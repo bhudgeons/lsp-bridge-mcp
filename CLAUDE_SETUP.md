@@ -159,6 +159,12 @@ sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_c
 3. get_diagnostics workspace="metals"
 ```
 
+**To look up type info, method signatures, or documentation:**
+```
+get_hover(workspace="metals", file_path="/absolute/path/File.scala", line=10, character=15)
+```
+This is MUCH faster than searching through code or reading library source files.
+
 ## After EVERY File Edit (Auto-Diagnostics)
 
 **A PostToolUse hook automatically triggers Metals compilation after every Scala file edit.**
@@ -216,6 +222,38 @@ When making multiple changes:
 
 **Check diagnostics after EACH edit, not just at the end.**
 
+## Using Hover for Type Information
+
+**Use `get_hover` to instantly look up type signatures, documentation, and scaladoc** instead of searching through code or reading library source files.
+
+```
+get_hover(workspace="metals", file_path="/absolute/path/File.scala", line=10, character=15)
+```
+
+**Parameters:**
+- `workspace`: Always "metals" for Scala
+- `file_path`: **Absolute path** to the file (not relative)
+- `line`: 1-indexed line number (as shown in editors)
+- `character`: 0-indexed column position
+
+**Use cases:**
+- Look up method signatures: `def foo(x: Int, y: String): Option[Result]`
+- Get case class field definitions
+- View scaladoc/documentation for standard library or third-party functions
+- Check type inference results for `val` or `var`
+- Understand what a symbol is without reading its source file
+
+**Example:**
+```
+# To check what `println` does at line 5, column 4:
+get_hover(workspace="metals", file_path="/Users/you/project/Main.scala", line=5, character=4)
+
+# Returns:
+# def println(x: Any): Unit
+# Prints out an object to the default output, followed by a newline character.
+# Parameters: x - the object to print.
+```
+
 ## Why LSP Instead of sbt
 
 - **Faster**: LSP is real-time (~3s), sbt is slow (30-60s)
@@ -223,6 +261,7 @@ When making multiple changes:
 - **Always running**: LSP is already monitoring
 - **Precise**: LSP shows exact locations
 - **No prompts**: Reading .lsp-bridge/ doesn't need permission
+- **Hover info**: Instantly get type signatures and documentation
 
 ## When to Use sbt
 
@@ -310,5 +349,8 @@ After this setup:
 3. ✅ No manual tool calls needed
 4. ✅ No permission prompts
 5. ✅ ~3 second feedback loop
+6. ✅ Instant type lookups with `get_hover`
 
-The key insight: **PostToolUse hooks enable automatic compilation**, so Claude just needs to read a file to get diagnostics.
+The key insights:
+- **PostToolUse hooks enable automatic compilation**, so Claude just needs to read a file to get diagnostics
+- **Hover provides instant type information**, so Claude doesn't need to search through code or libraries

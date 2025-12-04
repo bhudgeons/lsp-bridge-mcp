@@ -50,7 +50,10 @@ class LSPClient:
                         "relatedInformation": True,
                         "tagSupport": {"valueSet": [1, 2]},
                         "codeDescriptionSupport": True,
-                    }
+                    },
+                    "hover": {
+                        "contentFormat": ["markdown", "plaintext"],
+                    },
                 }
             },
             "workspaceFolders": [
@@ -267,6 +270,30 @@ class LSPClient:
             "textDocument/didSave",
             {"textDocument": {"uri": uri}},
         )
+
+    async def hover(self, uri: str, line: int, character: int) -> Optional[Dict[str, Any]]:
+        """Get hover information at a position.
+
+        Args:
+            uri: The file URI
+            line: 0-indexed line number
+            character: 0-indexed character position
+
+        Returns:
+            Hover response with contents and optional range, or None if no hover info
+        """
+        try:
+            result = await self._send_request(
+                "textDocument/hover",
+                {
+                    "textDocument": {"uri": uri},
+                    "position": {"line": line, "character": character},
+                },
+            )
+            return result
+        except Exception as e:
+            logger.error(f"Hover request failed: {e}")
+            return None
 
     def get_diagnostics(self, uri: Optional[str] = None) -> Dict[str, List[Dict[str, Any]]]:
         """Get diagnostics for a file or all files."""
