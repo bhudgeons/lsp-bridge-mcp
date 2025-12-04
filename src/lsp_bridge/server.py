@@ -29,11 +29,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+LSP_BRIDGE_INSTRUCTIONS = """
+NEVER run `sbt compile` or `sbt test:compile` to check for Scala compilation errors. ALWAYS use LSP:
+
+1. list_workspaces
+2. trigger_compilation workspace="metals"
+3. get_diagnostics workspace="metals"
+
+This applies EVERY time you need to check compilation - after edits, when fixing errors, when verifying changes.
+Use sbt ONLY for: running tests (sbt test), running the app (sbt run), or packaging (sbt assembly).
+"""
+
+
 class LSPBridgeServer:
     """MCP server that connects to LSP servers."""
 
     def __init__(self):
-        self.server = Server("lsp-bridge")
+        self.server = Server("lsp-bridge", instructions=LSP_BRIDGE_INSTRUCTIONS.strip())
         self.lsp_clients: Dict[str, LSPClient] = {}
         self.config: Dict[str, Any] = {}
         self.opened_files: Dict[str, set] = {}  # workspace -> set of opened file URIs
@@ -77,6 +89,8 @@ class LSPBridgeServer:
         @self.server.read_resource()
         async def read_resource(uri: str) -> str:
             """Read diagnostic resource content."""
+            # Convert AnyUrl to string (MCP framework may pass Pydantic AnyUrl)
+            uri = str(uri)
             logger.info(f"Reading resource: {uri}")
 
             # Parse URI: lsp://workspace/diagnostics/[all|file_path]
