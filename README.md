@@ -17,6 +17,25 @@ Connect Claude Code to Language Server Protocol (LSP) servers for real-time comp
 
 **For detailed Claude Code setup including CLAUDE.md configuration, see [CLAUDE_SETUP.md](CLAUDE_SETUP.md)**
 
+### Prerequisites
+
+For Scala projects, you need **Metals** installed and on your PATH:
+
+```bash
+# Install via Coursier (recommended)
+coursier install metals
+
+# Verify it's on your PATH
+metals --version
+```
+
+If `metals --version` doesn't work, add Coursier's bin directory to your PATH:
+```bash
+# Add to your ~/.bashrc, ~/.zshrc, or ~/.profile
+export PATH="$PATH:$HOME/Library/Application Support/Coursier/bin"  # macOS
+export PATH="$PATH:$HOME/.local/share/coursier/bin"                 # Linux
+```
+
 ### 1. Install
 
 **Option A: Global Installation (Recommended)**
@@ -442,6 +461,10 @@ tail -f /tmp/lsp-bridge-mcp.log
                  │   diagnostics.json     │◄── Claude reads
                  └────────────────────────┘
 ```
+
+## 🎬 Demo Project
+
+The `scalademo/` directory contains a sample Scala project for trying out lsp-bridge-mcp. See [scalademo/README.md](scalademo/README.md) for demo prompts that showcase the features.
 
 ## 📝 License
 

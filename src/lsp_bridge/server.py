@@ -48,6 +48,12 @@ To jump to a symbol's definition (instead of searching/grepping), use get_defini
   get_definition(workspace="metals", file_path="/path/to/File.scala", line=10, character=15)
 
 This returns the exact file and line where the symbol is defined.
+
+USE THESE TOOLS PROACTIVELY:
+- Before reading a file to find a return type → use get_hover
+- Before searching/grepping for a definition → use get_definition
+- When you see a method call and need its signature → use get_hover
+These are faster and more accurate than reading/searching files.
 """
 
 
@@ -472,6 +478,9 @@ class LSPBridgeServer:
                             )
                         ]
 
+                # Ensure all workspace files are opened (for cross-file analysis)
+                await self._ensure_files_opened(client, workspace)
+
                 # Convert 1-indexed line to 0-indexed for LSP
                 lsp_line = line - 1
 
@@ -547,6 +556,9 @@ class LSPBridgeServer:
                                 text=f"Error opening file: {e}",
                             )
                         ]
+
+                # Ensure all workspace files are opened (for cross-file analysis)
+                await self._ensure_files_opened(client, workspace)
 
                 # Convert 1-indexed line to 0-indexed for LSP
                 lsp_line = line - 1
@@ -640,17 +652,24 @@ Diagnostics:
         if workspace not in self.opened_files:
             self.opened_files[workspace] = set()
 
-        # Only open files if we haven't opened them recently
-        # (within the last 30 seconds to avoid re-opening constantly)
-        import time
-        if hasattr(client, '_last_files_opened'):
-            if time.time() - client._last_files_opened < 30:
-                logger.info("Files recently opened, skipping re-open")
-                return
-
         # Find all Scala files in the workspace
         workspace_path = client.workspace_root
         scala_files = list(workspace_path.glob("src/**/*.scala"))
+
+        # Check if we need to open any new files
+        current_file_uris = {f.resolve().as_uri() for f in scala_files}
+        already_opened = self.opened_files[workspace]
+        new_files = current_file_uris - already_opened
+
+        # Skip if no new files and we've already opened files recently
+        import time
+        if not new_files and hasattr(client, '_last_files_opened'):
+            if time.time() - client._last_files_opened < 30:
+                logger.debug("Files recently opened and no new files, skipping")
+                return
+
+        if new_files:
+            logger.info(f"Found {len(new_files)} new file(s) to open in Metals")
 
         for scala_file in scala_files:
             file_uri = scala_file.resolve().as_uri()
@@ -916,7 +935,7 @@ Diagnostics:
                     await self.start_lsp_client(
                         "metals",
                         str(workspace_path),
-                        ["/usr/local/bin/metals-vim"]
+                        ["metals"]
                     )
                     logger.info(f"Started Metals for {workspace_path}")
                     break  # Start only the first found project
@@ -934,7 +953,7 @@ Diagnostics:
                                 await self.start_lsp_client(
                                     "metals",
                                     str(subdir),
-                                    ["/usr/local/bin/metals-vim"]
+                                    ["metals"]
                                 )
                                 logger.info(f"Started Metals for {subdir}")
                                 break  # Start only the first found project
@@ -1066,7 +1085,7 @@ def main():
                     {
                         "name": "metals",
                         "workspace_root": str(workspace_path),
-                        "command": ["/usr/local/bin/metals-vim"]
+                        "command": ["metals"]
                     }
                 ]
             }

@@ -1,0 +1,18 @@
+# Scala/SBT
+target/
+project/target/
+project/project/
+
+# Metals/Bloop
+.metals/
+.bloop/
+.bsp/
+project/metals.sbt
+
+# LSP Bridge
+.lsp-bridge/
+
+# IDE
+.idea/
+.vscode/
+*.iml

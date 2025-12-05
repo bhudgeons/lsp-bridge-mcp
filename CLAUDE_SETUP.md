@@ -12,8 +12,23 @@ With this setup:
 
 ## Prerequisites
 
-1. Install lsp-bridge-mcp (see main README.md)
-2. Configure lsp-bridge for your project (see SETUP.md)
+1. **Metals on your PATH** (for Scala projects):
+   ```bash
+   # Install via Coursier
+   coursier install metals
+
+   # Verify it's on your PATH
+   metals --version
+   ```
+   If `metals --version` doesn't work, add Coursier's bin directory to your PATH:
+   ```bash
+   # Add to ~/.bashrc, ~/.zshrc, or ~/.profile
+   export PATH="$PATH:$HOME/Library/Application Support/Coursier/bin"  # macOS
+   export PATH="$PATH:$HOME/.local/share/coursier/bin"                 # Linux
+   ```
+   **Important:** After updating your PATH, restart your terminal or run `source ~/.bashrc` (or equivalent) before starting Claude Code.
+
+2. Install lsp-bridge-mcp (see main README.md)
 3. Have Claude Code installed
 
 ## Step 1: Configure MCP Server
@@ -147,17 +162,11 @@ Add instructions to your global `~/.claude/CLAUDE.md` to make Claude use the aut
 
 **NEVER run `sbt compile` or `sbt test:compile` to check for errors.**
 
-**After editing a Scala file, diagnostics are automatically updated.** Just read the diagnostics file:
+**After editing a Scala file, just wait 3 seconds and read the diagnostics file:**
 ```bash
 sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
 ```
-
-**If you need to manually trigger compilation or the diagnostics file doesn't exist:**
-```
-1. list_workspaces
-2. trigger_compilation workspace="metals"
-3. get_diagnostics workspace="metals"
-```
+A PostToolUse hook automatically triggers compilation - you do NOT need to call `trigger_compilation` manually.
 
 **To look up type info, method signatures, or documentation:**
 ```
@@ -170,62 +179,101 @@ get_definition(workspace="metals", file_path="/absolute/path/File.scala", line=1
 ```
 These are MUCH faster than searching through code or reading library source files.
 
-## After EVERY File Edit (Auto-Diagnostics)
-
-**A PostToolUse hook automatically triggers Metals compilation after every Scala file edit.**
-
-Diagnostics are written to `<project>/.lsp-bridge/diagnostics.json`. To check:
-
-```bash
-sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq .
-```
-
-**Workflow:**
-```
-1. Edit a .scala file
-2. Wait ~3 seconds (hook triggers compilation automatically)
-3. Read diagnostics: cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
-4. If errors found → Fix them immediately
-5. Repeat until 0 errors
-```
-
-**If diagnostics file doesn't exist or seems stale**, fall back to manual LSP:
+**Only use manual LSP tools if the diagnostics file doesn't exist:**
 ```
 1. list_workspaces
 2. trigger_compilation workspace="metals"
 3. get_diagnostics workspace="metals"
 ```
 
-## Example Workflow
+## FIRST STEP: When asked to check/fix errors
 
+**BEFORE doing anything else, ALWAYS run these commands IN ORDER:**
+
+1. `list_workspaces` - Initializes LSP workspace (may fail on first attempt in fresh session)
+   - If fails with "No such tool available": **Tell the user to send any message to retry**
+   - MCP tools become available between requests, not during a request
+   - Automated retries within the same response will always fail
+   - Once user sends a new message, the retry will succeed immediately
+   - Example message: "MCP server is still initializing. Please type 'continue' or any message, and I'll retry immediately."
+2. `trigger_compilation workspace="metals"` - Ensures Metals compiles the code
+3. `get_diagnostics workspace="metals"` - Retrieves compilation errors
+
+**NEVER:**
+- Run `sbt compile` to check for compilation errors
+- Run `sbt test:compile` to check test compilation
+- Skip calling list_workspaces first
+- Do automated retries if list_workspaces fails (they will always fail - need a new user message)
+- Immediately fall back to sbt on first failure (ask user to retry first)
+
+## Bloop Setup Check (BEFORE Using LSP)
+
+**CRITICAL**: Before using LSP diagnostics in a Scala project, ALWAYS check if Bloop is configured:
+
+```bash
+# 1. Check if .bloop exists
+if [ ! -d .bloop ]; then
+  # 2. Ensure sbt-bloop plugin is configured
+  if ! grep -q "sbt-bloop" project/plugins.sbt 2>/dev/null; then
+    echo 'addSbtPlugin("ch.epfl.scala" % "sbt-bloop" % "1.5.11")' >> project/plugins.sbt
+  fi
+
+  # 3. Generate Bloop configuration
+  sbt bloopInstall
+
+  # 4. Wait for Metals to detect Bloop
+  sleep 3
+fi
 ```
-User: "Fix the type error in Main.scala"
 
-1. Read Main.scala to see the code
-2. Check current errors: cat <project>/.lsp-bridge/diagnostics.json | jq .
-3. Edit Main.scala to fix the error
-4. Wait and check: sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
-5. If errors remain: Fix them immediately
-6. If no errors: Proceed or report success
+**Why this matters:**
+- Without Bloop, LSP will show 0 errors even when errors exist
+- Metals requires Bloop (Build Server Protocol) for compilation diagnostics
 
-NEVER skip step 4. NEVER assume the edit was correct.
-NEVER use sbt compile - ALWAYS use LSP.
+## After EVERY File Edit (Auto-Diagnostics)
+
+**A PostToolUse hook automatically triggers Metals compilation after every Scala file edit.**
+
+**You do NOT need to call `trigger_compilation` or `get_diagnostics` manually!** Just read the file:
+
+```bash
+sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
 ```
 
-## Multiple Edits
-
-When making multiple changes:
-
+**Workflow:**
 ```
-1. Edit File1.scala
-2. sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
-3. Fix any errors
-4. Edit File2.scala
-5. sleep 3 && cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
-6. Fix any errors
+1. Edit a .scala file
+2. Wait ~3 seconds (hook triggers compilation automatically)
+3. Read diagnostics file: cat <project>/.lsp-bridge/diagnostics.json | jq -c '{errors: .error_count}'
+4. If errors found → Fix them immediately
+5. Repeat until 0 errors
 ```
 
-**Check diagnostics after EACH edit, not just at the end.**
+**IMPORTANT:** Do NOT use `trigger_compilation` after edits - the hook already did it. Just read the diagnostics file.
+
+**Only fall back to manual LSP tools if the diagnostics file doesn't exist:**
+```
+1. list_workspaces
+2. trigger_compilation workspace="metals"
+3. get_diagnostics workspace="metals"
+```
+
+**Never proceed to the next edit without confirming the current edit has no errors (unless the error is expected because you're writing code in stages).**
+
+## Proactive LSP Usage
+
+**IMPORTANT: Use LSP tools proactively, not just when stuck.** These tools are faster and more accurate than searching/reading files:
+
+| Instead of... | Use LSP... |
+|---------------|------------|
+| Reading a file to find a method's return type | `get_hover` on the method call |
+| Grepping/searching to find where something is defined | `get_definition` on the symbol |
+| Reading library source files to understand an API | `get_hover` for signature + docs |
+| Guessing at type signatures | `get_hover` to confirm |
+
+**When you see a method call and need to understand its signature or return type, use `get_hover` BEFORE reading the source file.** It's faster and gives you exactly what you need.
+
+**When you need to navigate to a definition, use `get_definition` BEFORE using search/grep.** It jumps directly to the right location.
 
 ## Using Hover for Type Information
 
@@ -248,16 +296,10 @@ get_hover(workspace="metals", file_path="/absolute/path/File.scala", line=10, ch
 - Check type inference results for `val` or `var`
 - Understand what a symbol is without reading its source file
 
-**Example:**
-```
-# To check what `println` does at line 5, column 4:
-get_hover(workspace="metals", file_path="/Users/you/project/Main.scala", line=5, character=4)
-
-# Returns:
-# def println(x: Any): Unit
-# Prints out an object to the default output, followed by a newline character.
-# Parameters: x - the object to print.
-```
+**When to use hover vs reading files:**
+- ✅ Use hover: Quick type lookups, method signatures, library docs
+- ✅ Use hover: Understanding what a symbol is at a specific location
+- ❌ Don't use hover: Understanding control flow or reading full implementations
 
 ## Using Go to Definition
 
@@ -274,17 +316,6 @@ get_definition(workspace="metals", file_path="/absolute/path/File.scala", line=1
 - Find class/trait/object definitions
 - Jump to where a variable is declared
 - Explore library source code (Metals extracts sources from JARs)
-
-**Example:**
-```
-# To find where `greet` is defined at line 18, column 18:
-get_definition(workspace="metals", file_path="/Users/you/project/Main.scala", line=18, character=18)
-
-# Returns:
-# Definition found:
-# 📍 /Users/you/project/Main.scala:21
-# Use `Read` tool to view this file at line 21.
-```
 
 ## Why LSP Instead of sbt
 
