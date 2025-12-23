@@ -32,9 +32,11 @@ logger = logging.getLogger(__name__)
 LSP_BRIDGE_INSTRUCTIONS = """
 NEVER run `sbt compile` or `sbt test:compile` to check for Scala compilation errors. ALWAYS use LSP:
 
-1. list_workspaces
-2. trigger_compilation workspace="metals"
-3. get_diagnostics workspace="metals"
+1. trigger_compilation workspace="metals" workspace_root="/path/to/project"
+2. get_diagnostics workspace="metals"
+
+The workspace_root parameter enables lazy connection - pass the absolute path to your Scala project
+on the first call, and subsequent calls can omit it since the workspace will already be connected.
 
 This applies EVERY time you need to check compilation - after edits, when fixing errors, when verifying changes.
 Use sbt ONLY for: running tests (sbt test), running the app (sbt run), or packaging (sbt assembly).
@@ -154,6 +156,10 @@ class LSPBridgeServer:
                                 "type": "string",
                                 "description": "Optional: specific file path to get diagnostics for",
                             },
+                            "workspace_root": {
+                                "type": "string",
+                                "description": "Optional: absolute path to workspace root (e.g., '/path/to/project'). If provided and workspace not connected, will lazily connect.",
+                            },
                         },
                         "required": ["workspace"],
                     },
@@ -168,14 +174,26 @@ class LSPBridgeServer:
                                 "type": "string",
                                 "description": "Workspace name (e.g., 'metals')",
                             },
+                            "workspace_root": {
+                                "type": "string",
+                                "description": "Optional: absolute path to workspace root (e.g., '/path/to/project'). If provided and workspace not connected, will lazily connect.",
+                            },
                         },
                         "required": ["workspace"],
                     },
                 ),
                 Tool(
                     name="list_workspaces",
-                    description="List all connected LSP server workspaces",
-                    inputSchema={"type": "object", "properties": {}},
+                    description="List all connected LSP server workspaces. Pass workspace_root to connect a new workspace.",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "workspace_root": {
+                                "type": "string",
+                                "description": "Optional: absolute path to workspace root to connect (e.g., '/path/to/project')",
+                            },
+                        },
+                    },
                 ),
                 Tool(
                     name="get_status",
@@ -250,8 +268,15 @@ class LSPBridgeServer:
             logger.info(f"Tool called: {name} with args: {arguments}")
 
             if name == "list_workspaces":
-                # Auto-detect on first call if no workspaces
-                if not self.lsp_clients:
+                workspace_root = arguments.get("workspace_root")
+
+                # If workspace_root provided, connect to it
+                if workspace_root:
+                    error = await self._ensure_workspace_connected("metals", workspace_root)
+                    if error:
+                        return [TextContent(type="text", text=error)]
+                # Otherwise auto-detect on first call if no workspaces
+                elif not self.lsp_clients:
                     logger.info("No workspaces connected, attempting auto-detection...")
                     await self.auto_detect_workspace()
 
@@ -274,19 +299,12 @@ class LSPBridgeServer:
             elif name == "get_diagnostics":
                 workspace = arguments.get("workspace")
                 file_path = arguments.get("file_path")
+                workspace_root = arguments.get("workspace_root")
 
-                # Auto-detect on first call if no workspaces
-                if not self.lsp_clients:
-                    logger.info("No workspaces connected, attempting auto-detection...")
-                    await self.auto_detect_workspace()
-
-                if workspace not in self.lsp_clients:
-                    return [
-                        TextContent(
-                            type="text",
-                            text=f"Error: Unknown workspace '{workspace}'. Available: {list(self.lsp_clients.keys())}",
-                        )
-                    ]
+                # Ensure workspace is connected (lazy connect if workspace_root provided)
+                error = await self._ensure_workspace_connected(workspace, workspace_root)
+                if error:
+                    return [TextContent(type="text", text=error)]
 
                 client = self.lsp_clients[workspace]
 
@@ -323,14 +341,12 @@ class LSPBridgeServer:
 
             elif name == "trigger_compilation":
                 workspace = arguments.get("workspace")
+                workspace_root = arguments.get("workspace_root")
 
-                if workspace not in self.lsp_clients:
-                    return [
-                        TextContent(
-                            type="text",
-                            text=f"Error: Unknown workspace '{workspace}'",
-                        )
-                    ]
+                # Ensure workspace is connected (lazy connect if workspace_root provided)
+                error = await self._ensure_workspace_connected(workspace, workspace_root)
+                if error:
+                    return [TextContent(type="text", text=error)]
 
                 client = self.lsp_clients[workspace]
 
@@ -693,6 +709,44 @@ Diagnostics:
         # Mark files as opened
         import time
         client._last_files_opened = time.time()
+
+    async def _ensure_workspace_connected(
+        self, workspace: str, workspace_root: Optional[str]
+    ) -> Optional[str]:
+        """
+        Ensure a workspace is connected. If workspace_root is provided and
+        workspace is not connected, lazily connect to it.
+
+        Returns None on success, or an error message string on failure.
+        """
+        # If already connected, nothing to do
+        if workspace in self.lsp_clients:
+            return None
+
+        # If no workspace_root provided, try auto-detection
+        if not workspace_root:
+            logger.info(f"Workspace '{workspace}' not connected, attempting auto-detection...")
+            await self.auto_detect_workspace()
+            if workspace in self.lsp_clients:
+                return None
+            return f"Error: Unknown workspace '{workspace}'. No workspace_root provided and auto-detection failed. Available: {list(self.lsp_clients.keys())}"
+
+        # Validate workspace_root is a Scala project
+        workspace_path = Path(workspace_root).resolve()
+        if not workspace_path.exists():
+            return f"Error: workspace_root does not exist: {workspace_root}"
+
+        if not (workspace_path / "build.sbt").exists() and not (workspace_path / "build.sc").exists():
+            return f"Error: workspace_root is not a Scala project (no build.sbt or build.sc): {workspace_root}"
+
+        # Connect to the workspace
+        logger.info(f"Lazily connecting workspace '{workspace}' at {workspace_root}")
+        try:
+            await self.start_lsp_client(workspace, str(workspace_path), ["metals"])
+            logger.info(f"Successfully connected workspace '{workspace}' at {workspace_root}")
+            return None
+        except Exception as e:
+            return f"Error connecting to workspace: {e}"
 
     def _format_hover(
         self, hover_result: Dict[str, Any], file_name: str, line: int, character: int
