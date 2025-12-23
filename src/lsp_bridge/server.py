@@ -1095,11 +1095,13 @@ Diagnostics:
 
     async def run(self, config_path: Optional[str] = None) -> None:
         """Run the MCP server."""
-        if config_path:
-            await self.load_config(config_path)
-
         # Start the notify file watcher
         self._notify_watcher_task = asyncio.create_task(self._watch_notify_file())
+
+        # Load config in background (non-blocking) so MCP server starts immediately
+        # This allows tools to be available right away, with LSP connecting lazily
+        if config_path:
+            asyncio.create_task(self._load_config_background(config_path))
 
         async with stdio_server() as (read_stream, write_stream):
             await self.server.run(
@@ -1107,6 +1109,15 @@ Diagnostics:
                 write_stream,
                 self.server.create_initialization_options(),
             )
+
+    async def _load_config_background(self, config_path: str) -> None:
+        """Load config in background without blocking MCP server startup."""
+        try:
+            # Small delay to let MCP server fully initialize first
+            await asyncio.sleep(0.5)
+            await self.load_config(config_path)
+        except Exception as e:
+            logger.error(f"Background config load failed: {e}")
 
     async def shutdown(self) -> None:
         """Shutdown all LSP clients."""
